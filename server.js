@@ -4,6 +4,7 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
+const multer = require('multer');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -18,6 +19,27 @@ const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
 }
+
+// Multer setup for .xlsx file uploads
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, uploadsDir);
+    },
+    filename: (req, file, cb) => {
+        const uniqueName = `uploaded_${uuidv4()}.xlsx`;
+        cb(null, uniqueName);
+    }
+});
+const upload = multer({
+    storage,
+    fileFilter: (req, file, cb) => {
+        if (file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
+            cb(null, true);
+        } else {
+            cb(new Error('Only .xlsx files are allowed!'));
+        }
+    }
+});
 
 // Store for generated files (in production, use a database)
 const fileStore = new Map();
@@ -143,6 +165,42 @@ async function processPayloadToExcel(payload) {
     
     return { filename, filepath };
 }
+
+/**
+ * API endpoint to upload an .xlsx file
+ */
+app.post('/api/upload-xlsx', upload.single('file'), (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({
+                error: 'No file uploaded',
+                message: 'Please upload a .xlsx file'
+            });
+        }
+
+        const fileId = uuidv4();
+        const fileInfo = {
+            filename: req.file.filename,
+            filepath: req.file.path,
+            createdAt: new Date().toISOString()
+        };
+        fileStore.set(fileId, fileInfo);
+
+        res.status(201).json({
+            success: true,
+            message: 'File uploaded successfully',
+            fileId,
+            filename: req.file.filename,
+            downloadUrl: `/api/download/${fileId}`
+        });
+    } catch (error) {
+        console.error('Error uploading file:', error);
+        res.status(500).json({
+            error: 'Internal server error',
+            message: 'Failed to upload file'
+        });
+    }
+});
 
 /**
  * API endpoint to download generated Excel file
@@ -290,6 +348,7 @@ app.get('/', (req, res) => {
         version: '1.0.0',
         endpoints: {
             'POST /api/process-chatgpt': 'Process ChatGPT payload and generate Excel file',
+            'POST /api/upload-xlsx': 'Upload a .xlsx file',
             'GET /api/download/:fileId': 'Download generated Excel file',
             'GET /api/files': 'List all generated files',
             'DELETE /api/files/:fileId': 'Delete a generated file',
